@@ -9,7 +9,7 @@ An end-to-end classic machine learning project that predicts how many clicks a Y
 | 1. Data and exploration | Generate a realistic dataset, explore it, clean it, engineer features | ✅ Done |
 | 2. Train and evaluate | Linear regression pipeline, RMSE / MAE / R², residual plots, baseline comparison | ✅ Done |
 | 3. Deploy | FastAPI prediction service in a Docker container | ✅ Done |
-| 4. Monitor | Prediction logging, drift reports with Evidently, CI and retraining with GitHub Actions | ⏳ Next |
+| 4. Monitor | Prediction logging, drift reports with Evidently, CI and retraining with GitHub Actions | ✅ Done |
 
 ## Quick start
 
@@ -21,15 +21,18 @@ pip install -r requirements.txt
 python src/generate_data.py      # writes data/youtube_ads.csv
 python src/train.py              # trains, evaluates, saves models/model.joblib
 python src/compare_models.py     # compares six models on the same test set
-python -m pytest                 # data, model and API tests
+python -m pytest                 # data, model, API and monitoring tests
 jupyter notebook notebooks/      # 01 exploration, 02 training/evaluation, 03 model comparison
 ```
 
 ## Project structure
 
 ```
+├── .github/workflows/
+│   ├── ci.yml                     # tests + Docker build on every PR
+│   └── monitor.yml                # weekly drift check and retraining
 ├── app/
-│   └── main.py                    # FastAPI prediction service
+│   └── main.py                    # FastAPI service (predicts, logs, takes feedback)
 ├── data/                          # generated CSVs (not committed, recreate with the script)
 ├── models/
 │   ├── model.joblib               # trained model (cleaning + features + regression in one object)
@@ -43,10 +46,14 @@ jupyter notebook notebooks/      # 01 exploration, 02 training/evaluation, 03 mo
 │   ├── generate_data.py           # creates the synthetic dataset
 │   ├── features.py                # cleaning + feature pipeline reused by training and the API
 │   ├── train.py                   # trains, compares and saves the model
-│   └── compare_models.py          # compares linear regression with five alternatives
+│   ├── compare_models.py          # compares linear regression with five alternatives
+│   ├── simulate_traffic.py        # sends a week of fake traffic (normal or drifted)
+│   ├── monitor.py                 # drift + accuracy checks, HTML reports, retrain decision
+│   └── retrain.py                 # champion vs challenger retraining
 ├── tests/
 │   ├── test_pipeline.py           # sanity checks for data, features and model
-│   └── test_api.py                # API tests
+│   ├── test_api.py                # API tests
+│   └── test_monitoring.py         # end-to-end: drift is caught and retraining fixes it
 ├── Dockerfile                     # container for the API
 ├── requirements.txt               # everything for development
 └── requirements-api.txt           # minimal, pinned dependencies for serving
@@ -223,3 +230,81 @@ The same budget and impressions for a Finance bumper ad on TV, shown to a 55+ au
 
 ### Moving to AWS later
 The same container can be deployed without code changes. Push the image to **Amazon ECR**, then run it on **AWS App Runner** (simplest) or **ECS Fargate**. For SageMaker, the model file can be served with the SageMaker scikit-learn container.
+
+---
+
+## Step 4: Monitoring and retraining
+
+A model that's accurate today slowly gets worse as the world changes: new devices, new audiences, ad fatigue. This step closes the loop.
+
+```
+ ┌──────────┐  predict   ┌───────────┐   logs    ┌────────────┐  retrain?  ┌────────────┐
+ │  Client  │ ─────────▶ │  FastAPI  │ ────────▶ │ monitor.py │ ─────────▶ │ retrain.py │
+ └──────────┘ ◀───────── └───────────┘           └────────────┘            └────────────┘
+      │      prediction_id    ▲                    drift + accuracy        champion vs
+      └──── /feedback ────────┘                     HTML reports           challenger
+          (real clicks)
+```
+
+### 1. Logging (`app/main.py`)
+- Every prediction is appended to `logs/predictions.jsonl` with its inputs, output, timestamp and a `prediction_id`.
+- When the real click count is known (for example, the next day), the client sends it to `POST /feedback` with the same `prediction_id`. It's saved to `logs/feedback.jsonl`.
+- In Docker, mount a volume to keep the logs: `docker run -p 8000:8000 -v $(pwd)/logs:/srv/logs youtube-ads-api`
+
+### 2. Monitoring (`src/monitor.py`)
+It compares recent traffic with the training data and checks three things:
+
+| Check | Question | Tool |
+|-------|----------|------|
+| Data drift | Do incoming ads look different from training? | Evidently statistical tests per feature |
+| Prediction drift | Are predictions shifting? | Evidently |
+| Accuracy | For ads with real clicks, is the error worse than at training time? | MAE vs training MAE |
+
+**Retraining rules:** retrain if 30% or more of the features drift, **or** if live MAE is 25% or more worse than training MAE (once at least 200 real outcomes are in). The output is `reports/data_drift_report.html`, `reports/model_performance_report.html` and `reports/monitoring_summary.json`.
+
+### 3. Retraining (`src/retrain.py`)
+A **champion vs challenger** check, so a bad retrain never reaches production:
+1. Recent labelled ads are split 70/30.
+2. The challenger trains on the history plus the 70%, with recent ads weighted ×30 so recent behaviour outweighs history about 3:1.
+3. Both models are scored on the unseen 30%.
+4. The challenger replaces the model **only if it wins**. The old model is kept as `models/model_previous.joblib` for rollback.
+
+### Try it: catching drift
+```bash
+python src/simulate_traffic.py --scenario drift --log-dir logs   # TV + older audiences, CTR down 35%
+python src/monitor.py --log-dir logs
+python src/retrain.py --log-dir logs
+```
+
+Results from the simulation:
+
+| | Normal week | Drifted week |
+|---|---:|---:|
+| Drifted features | none | device, age_group |
+| Live MAE (training: 71.6) | 69.3 | **130.6 (1.8×)** |
+| Live R² | 0.96 | 0.53 |
+| Decision | Healthy | **Retrain** |
+
+After retraining on the drifted week (scored on 900 held-out recent ads):
+
+| | Old model (champion) | Retrained (challenger) |
+|---|---:|---:|
+| MAE | 130.5 | **46.3** |
+| R² | 0.47 | **0.92** |
+| Typical error | 55% | **16%** |
+
+**Why the accuracy check matters:** only 2 of 10 features drifted (below the 30% limit), so data drift alone wouldn't have triggered retraining. The big problem was *concept drift*: the same ad now gets fewer clicks. Only comparing predictions against real outcomes catches that.
+
+### 4. Automation (GitHub Actions)
+- **`ci.yml`**: on every push and pull request, installs dependencies, runs all tests and builds the Docker image.
+- **`monitor.yml`**: every Monday at 09:00 IST, and on demand from the **Actions** tab, it runs monitoring, retrains if needed, and uploads the HTML reports and any retrained model as downloadable artifacts. A summary appears on the run page. To see it in action, open *Actions → Model monitoring → Run workflow* and choose **drift**.
+
+In production, the job would read real logs from storage (such as S3) instead of simulating them. A person reviews the retrained model's artifacts before committing it.
+
+### Moving to AWS later
+| This project | AWS equivalent |
+|---|---|
+| JSONL prediction logs | SageMaker endpoint data capture → S3 |
+| `monitor.py` + Evidently | SageMaker Model Monitor (data quality + model quality) |
+| GitHub Actions schedule | EventBridge schedule → SageMaker Pipelines |
+| Champion vs challenger | SageMaker Model Registry with approval status |

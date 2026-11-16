@@ -1,0 +1,76 @@
+# Weekly model health check: drift + accuracy, and retraining when needed.
+#
+# In production this job would read the API's real logs (e.g. from S3). Here it simulates
+# a week of traffic so the whole loop can be seen working. Run it by hand from the
+# Actions tab and pick "drift" to watch it catch a problem and retrain.
+name: Model monitoring
+
+on:
+  schedule:
+    - cron: "30 3 * * 1"  # every Monday 03:30 UTC (09:00 IST)
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: "Simulated traffic"
+        type: choice
+        options: [normal, drift]
+        default: drift
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: Prepare data and traffic
+        run: |
+          python src/generate_data.py
+          python src/simulate_traffic.py --scenario "${{ inputs.scenario || 'normal' }}" --log-dir logs
+
+      - name: Check drift and accuracy
+        id: monitor
+        run: |
+          python src/monitor.py --log-dir logs --out reports
+          echo "retrain=$(python -c "import json; print(str(json.load(open('reports/monitoring_summary.json'))['retrain_needed']).lower())")" >> "$GITHUB_OUTPUT"
+
+      - name: Retrain (champion vs challenger)
+        if: steps.monitor.outputs.retrain == 'true'
+        run: python src/retrain.py --log-dir logs
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## Model monitoring"
+            echo '```json'
+            cat reports/monitoring_summary.json
+            echo '```'
+            if [ -f models/retrain_report.json ]; then
+              echo "## Retraining"
+              echo '```json'
+              cat models/retrain_report.json
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: monitoring-reports
+          path: reports/
+
+      - name: Upload retrained model
+        if: steps.monitor.outputs.retrain == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrained-model
+          path: |
+            models/model.joblib
+            models/metrics.json
+            models/retrain_report.json

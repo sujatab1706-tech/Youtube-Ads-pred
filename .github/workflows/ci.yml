@@ -1,0 +1,24 @@
+# Runs every test on each push to main and on every pull request.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Generate training data
+        run: python src/generate_data.py
+      - name: Run tests
+        run: python -m pytest -q
+      - name: Check the Docker image builds
+        run: docker build -t youtube-ads-api .

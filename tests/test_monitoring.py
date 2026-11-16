@@ -10,7 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def run(*args):
-    subprocess.run([sys.executable, *args], cwd=ROOT, check=True, capture_output=True, text=True)
+    result = subprocess.run([sys.executable, *args], cwd=ROOT, capture_output=True, text=True)
+    assert result.returncode == 0, f"{args[0]} failed:\n{result.stderr[-3000:]}"
 
 
 def test_drift_is_detected_and_retraining_helps(tmp_path):

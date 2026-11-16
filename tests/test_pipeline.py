@@ -51,3 +51,13 @@ def test_model_handles_missing_values_and_new_categories():
     row["category"] = "Music"  # never seen in training
     pred = model.predict(row)
     assert np.isfinite(pred).all() and pred[0] >= 0
+
+
+def test_logistic_ctr_predicts_valid_click_rates():
+    from compare_models import LogisticCTR
+
+    X, y = small_dataset()
+    model = LogisticCTR(C=1e4).fit(X, y)
+    ctr = model.predict_ctr(X)
+    assert ((ctr > 0) & (ctr < 1)).all()
+    assert abs(model.predict(X).sum() / y.sum() - 1) < 0.1  # total clicks roughly right

@@ -20,8 +20,9 @@ pip install -r requirements.txt
 
 python src/generate_data.py      # writes data/youtube_ads.csv
 python src/train.py              # trains, evaluates, saves models/model.joblib
+python src/compare_models.py     # compares six models on the same test set
 pytest tests                     # quick sanity checks
-jupyter notebook notebooks/      # 01 = exploration, 02 = training and evaluation
+jupyter notebook notebooks/      # 01 exploration, 02 training/evaluation, 03 model comparison
 ```
 
 ## Project structure
@@ -30,14 +31,17 @@ jupyter notebook notebooks/      # 01 = exploration, 02 = training and evaluatio
 ├── data/                          # generated CSVs (not committed, recreate with the script)
 ├── models/
 │   ├── model.joblib               # trained model (cleaning + features + regression in one object)
-│   └── metrics.json               # test scores of every model compared
+│   ├── metrics.json               # Step 2 test scores
+│   └── comparison.json            # scores of all six models compared
 ├── notebooks/
 │   ├── 01_data_exploration.ipynb  # Step 1: EDA, cleaning, feature engineering
-│   └── 02_train_evaluate.ipynb    # Step 2: training, metrics, residuals, coefficients
+│   ├── 02_train_evaluate.ipynb    # Step 2: training, metrics, residuals, coefficients
+│   └── 03_model_comparison.ipynb  # Step 2b: linear vs Ridge, Lasso, Poisson, logistic, boosting
 ├── src/
 │   ├── generate_data.py           # creates the synthetic dataset
 │   ├── features.py                # cleaning + feature pipeline reused by training and the API
-│   └── train.py                   # trains, compares and saves the model
+│   ├── train.py                   # trains, compares and saves the model
+│   └── compare_models.py          # compares linear regression with five alternatives
 ├── tests/
 │   └── test_pipeline.py           # sanity checks for data, features and model
 └── requirements.txt
@@ -136,3 +140,22 @@ With a log target, each coefficient converts to a percentage effect on clicks: `
 - The data is synthetic, so real-world accuracy would be lower.
 - Converting log predictions back slightly underestimates the mean (retransformation bias).
 - Interactions, such as mobile *and* evening, aren't modelled unless added as features.
+
+---
+
+## Step 2b: Is linear regression the right model?
+
+`src/compare_models.py` and `notebooks/03_model_comparison.ipynb` test the chosen model against five alternatives on the same test set.
+
+| Model | MAE | RMSE | R² | Notes |
+|-------|----:|-----:|---:|-------|
+| Lasso (log clicks) | 71.6 | 139.0 | 0.951 | Sets budget, subscribers and "morning" to exactly zero |
+| Ridge (log clicks) | 71.6 | 139.1 | 0.951 | No gain: enough data that plain regression doesn't overfit |
+| **Linear (log clicks)** | **71.6** | **139.1** | **0.951** | **Chosen: joint-best, fastest, simplest to explain** |
+| Poisson GLM | 72.2 | 139.1 | 0.951 | The textbook model for counts. Equally good |
+| Gradient boosting | 76.1 | 147.0 | 0.945 | Flexible, but the true pattern is multiplicative, which logs capture exactly |
+| Logistic (click rate) | 79.0 | 152.5 | 0.941 | Predicts P(click) per impression × impressions |
+
+**Why logistic regression is framed on click rate:** logistic regression predicts yes/no outcomes, and clicks is a count. So each impression is treated as a yes/no trial, and predicted clicks = P(click) × impressions. It trails here because it lets very large ads dominate the fit, and because it assumes an S-shaped curve while these click rates multiply. Its odds ratios are still useful for explaining what makes *each viewer* more likely to click. Impressions and budget come out near 1, because they change how many people see the ad, not how likely each one is to click.
+
+**Verdict:** keep linear regression on log clicks. Re-test gradient boosting once real data is available, since real behaviour usually has interactions that trees can learn.

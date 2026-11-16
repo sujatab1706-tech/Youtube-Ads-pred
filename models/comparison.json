@@ -1,0 +1,44 @@
+{
+  "lasso_log": {
+    "rmse": 139.0486,
+    "mae": 71.6297,
+    "r2": 0.9506,
+    "median_abs_pct_error": 12.2412,
+    "train_seconds": 0.2051
+  },
+  "ridge_log": {
+    "rmse": 139.0849,
+    "mae": 71.6312,
+    "r2": 0.9506,
+    "median_abs_pct_error": 12.2018,
+    "train_seconds": 0.2099
+  },
+  "linear_log": {
+    "rmse": 139.0872,
+    "mae": 71.6321,
+    "r2": 0.9506,
+    "median_abs_pct_error": 12.2026,
+    "train_seconds": 0.0837
+  },
+  "poisson_glm": {
+    "rmse": 139.0998,
+    "mae": 72.1794,
+    "r2": 0.9506,
+    "median_abs_pct_error": 12.5072,
+    "train_seconds": 0.9607
+  },
+  "gradient_boosting": {
+    "rmse": 147.0244,
+    "mae": 76.1149,
+    "r2": 0.9448,
+    "median_abs_pct_error": 13.2274,
+    "train_seconds": 0.796
+  },
+  "logistic_ctr": {
+    "rmse": 152.464,
+    "mae": 79.0352,
+    "r2": 0.9407,
+    "median_abs_pct_error": 13.2302,
+    "train_seconds": 0.2148
+  }
+}

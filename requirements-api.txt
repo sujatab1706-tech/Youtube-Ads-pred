@@ -1,0 +1,9 @@
+# Minimal dependencies for serving the model. scikit-learn is pinned to the
+# version the model was trained with, because pickled models can break across versions.
+fastapi==0.163.1
+uvicorn[standard]==0.54.0
+pydantic==2.13.5
+scikit-learn==1.9.1
+numpy==2.5.3
+pandas==3.0.5
+joblib==1.6.0

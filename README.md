@@ -8,8 +8,8 @@ An end-to-end classic machine learning project that predicts how many clicks a Y
 |------|--------------|--------|
 | 1. Data and exploration | Generate a realistic dataset, explore it, clean it, engineer features | ✅ Done |
 | 2. Train and evaluate | Linear regression pipeline, RMSE / MAE / R², residual plots, baseline comparison | ✅ Done |
-| 3. Deploy | FastAPI prediction service in a Docker container | ⏳ Next |
-| 4. Monitor | Prediction logging, drift reports with Evidently, CI and retraining with GitHub Actions | ⏳ |
+| 3. Deploy | FastAPI prediction service in a Docker container | ✅ Done |
+| 4. Monitor | Prediction logging, drift reports with Evidently, CI and retraining with GitHub Actions | ⏳ Next |
 
 ## Quick start
 
@@ -21,13 +21,15 @@ pip install -r requirements.txt
 python src/generate_data.py      # writes data/youtube_ads.csv
 python src/train.py              # trains, evaluates, saves models/model.joblib
 python src/compare_models.py     # compares six models on the same test set
-pytest tests                     # quick sanity checks
+python -m pytest                 # data, model and API tests
 jupyter notebook notebooks/      # 01 exploration, 02 training/evaluation, 03 model comparison
 ```
 
 ## Project structure
 
 ```
+├── app/
+│   └── main.py                    # FastAPI prediction service
 ├── data/                          # generated CSVs (not committed, recreate with the script)
 ├── models/
 │   ├── model.joblib               # trained model (cleaning + features + regression in one object)
@@ -43,8 +45,11 @@ jupyter notebook notebooks/      # 01 exploration, 02 training/evaluation, 03 mo
 │   ├── train.py                   # trains, compares and saves the model
 │   └── compare_models.py          # compares linear regression with five alternatives
 ├── tests/
-│   └── test_pipeline.py           # sanity checks for data, features and model
-└── requirements.txt
+│   ├── test_pipeline.py           # sanity checks for data, features and model
+│   └── test_api.py                # API tests
+├── Dockerfile                     # container for the API
+├── requirements.txt               # everything for development
+└── requirements-api.txt           # minimal, pinned dependencies for serving
 ```
 
 ---
@@ -159,3 +164,62 @@ With a log target, each coefficient converts to a percentage effect on clicks: `
 **Why logistic regression is framed on click rate:** logistic regression predicts yes/no outcomes, and clicks is a count. So each impression is treated as a yes/no trial, and predicted clicks = P(click) × impressions. It trails here because it lets very large ads dominate the fit, and because it assumes an S-shaped curve while these click rates multiply. Its odds ratios are still useful for explaining what makes *each viewer* more likely to click. Impressions and budget come out near 1, because they change how many people see the ad, not how likely each one is to click.
 
 **Verdict:** keep linear regression on log clicks. Re-test gradient boosting once real data is available, since real behaviour usually has interactions that trees can learn.
+
+---
+
+## Step 3: Deploy as a web service
+
+The trained model is served by a **FastAPI** app (`app/main.py`) and packaged in a **Docker** container, so it runs the same on any laptop, server or cloud.
+
+### Endpoints
+
+| Method | Path | What it does |
+|--------|------|--------------|
+| GET | `/health` | Liveness check, used by Docker and load balancers |
+| GET | `/model-info` | Model type, features and test scores |
+| POST | `/predict` | Predicted clicks and click-through rate for one ad |
+| POST | `/predict/batch` | Same, for up to 1,000 ads in one request |
+| GET | `/docs` | Interactive documentation, where you can try every endpoint in the browser |
+
+### Run it without Docker
+
+```bash
+pip install -r requirements.txt
+uvicorn app.main:app --reload
+# open http://127.0.0.1:8000/docs
+```
+
+### Run it with Docker
+
+```bash
+docker build -t youtube-ads-api .
+docker run -p 8000:8000 youtube-ads-api
+```
+
+### Example request
+
+```bash
+curl -X POST http://127.0.0.1:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"category": "Gaming", "device": "Mobile", "ad_format": "In-feed", "age_group": "18-24",
+       "hour": 20, "day_of_week": 5, "ad_length_sec": 15, "daily_budget_usd": 150,
+       "impressions": 40000, "channel_subscribers": 250000, "video_watch_pct": 60,
+       "thumbnail_quality": 4}'
+```
+
+```json
+{"predicted_clicks": 1369.8, "predicted_ctr_pct": 3.425}
+```
+
+The same budget and impressions for a Finance bumper ad on TV, shown to a 55+ audience at 3 AM, predicts about **39 clicks (0.1% CTR)**. That's 35× fewer.
+
+### Design decisions
+- **Input validation:** Pydantic rejects bad input (an unknown device, hour 25, zero impressions) with a clear 422 error, before it reaches the model.
+- **Same features in training and serving:** the API reuses `src/features.py`, and the saved model contains the full preprocessing pipeline, so there's no training/serving skew.
+- **Optional fields:** `channel_subscribers` and `video_watch_pct` can be left out. The pipeline fills them with the training median.
+- **Sanity limits:** predictions are clipped to between 0 and the number of impressions.
+- **Pinned versions:** `requirements-api.txt` pins scikit-learn to the version the model was trained with, because saved models can break across versions.
+- **Small, safe image:** the container holds only the API code, feature code and model, and runs as a non-root user with a health check.
+
+### Moving to AWS later
+The same container can be deployed without code changes. Push the image to **Amazon ECR**, then run it on **AWS App Runner** (simplest) or **ECS Fargate**. For SageMaker, the model file can be served with the SageMaker scikit-learn container.

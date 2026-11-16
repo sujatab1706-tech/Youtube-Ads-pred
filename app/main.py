@@ -8,7 +8,10 @@ Then open http://127.0.0.1:8000/docs to try it in the browser.
 import json
 import os
 import sys
+import threading
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional
@@ -26,6 +29,10 @@ from features import CATEGORICAL, NUMERIC, add_features  # noqa: E402
 MODEL_PATH = Path(os.getenv("MODEL_PATH", ROOT / "models" / "model.joblib"))
 METRICS_PATH = MODEL_PATH.with_name("metrics.json")
 MAX_BATCH = 1000
+LOG_DIR = Path(os.getenv("LOG_DIR", ROOT / "logs"))
+PREDICTION_LOG = LOG_DIR / "predictions.jsonl"
+FEEDBACK_LOG = LOG_DIR / "feedback.jsonl"
+_log_lock = threading.Lock()
 
 
 class Ad(BaseModel):
@@ -57,8 +64,14 @@ class Ad(BaseModel):
 
 
 class Prediction(BaseModel):
+    prediction_id: str = Field(description="Send this back to /feedback with the real clicks once you know them")
     predicted_clicks: float
     predicted_ctr_pct: float = Field(description="Predicted clicks / impressions, as a percentage")
+
+
+class Feedback(BaseModel):
+    prediction_id: str
+    actual_clicks: int = Field(ge=0)
 
 
 class BatchRequest(BaseModel):
@@ -85,12 +98,36 @@ def to_features(ads: list[Ad]) -> pd.DataFrame:
     return add_features(df)[NUMERIC + CATEGORICAL]
 
 
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def append_jsonl(path: Path, records: list[dict]) -> None:
+    """Append records to a JSON Lines file. Logging must never break a prediction."""
+    try:
+        with _log_lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a") as f:
+                for r in records:
+                    f.write(json.dumps(r) + "\n")
+    except OSError as exc:  # pragma: no cover
+        print(f"WARNING: could not write {path}: {exc}")
+
+
 def predict(ads: list[Ad]) -> list[Prediction]:
     clicks = np.clip(get_model().predict(to_features(ads)), 0, None)
-    out = []
+    out, logs, ts = [], [], now()
     for ad, c in zip(ads, clicks):
         c = min(float(c), float(ad.impressions))  # can't click more than it was shown
-        out.append(Prediction(predicted_clicks=round(c, 1), predicted_ctr_pct=round(100 * c / ad.impressions, 3)))
+        pred = Prediction(
+            prediction_id=str(uuid.uuid4()),
+            predicted_clicks=round(c, 1),
+            predicted_ctr_pct=round(100 * c / ad.impressions, 3),
+        )
+        out.append(pred)
+        logs.append({"timestamp": ts, "prediction_id": pred.prediction_id, **ad.model_dump(),
+                     "predicted_clicks": pred.predicted_clicks})
+    append_jsonl(PREDICTION_LOG, logs)
     return out
 
 
@@ -133,3 +170,10 @@ def predict_one(ad: Ad):
 @app.post("/predict/batch", response_model=BatchResponse)
 def predict_batch(req: BatchRequest):
     return BatchResponse(predictions=predict(req.ads))
+
+
+@app.post("/feedback")
+def feedback(fb: Feedback):
+    """Record the real clicks for an earlier prediction, so model accuracy can be monitored."""
+    append_jsonl(FEEDBACK_LOG, [{"timestamp": now(), **fb.model_dump()}])
+    return {"status": "recorded"}

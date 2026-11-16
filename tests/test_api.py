@@ -69,3 +69,17 @@ def test_model_info():
     with client() as c:
         body = c.get("/model-info").json()
     assert body["model_type"] == "linear_log" and body["test_metrics"]["r2"] > 0.9
+
+
+def test_predictions_and_feedback_are_logged():
+    import json
+
+    from app.main import FEEDBACK_LOG, PREDICTION_LOG
+
+    with client() as c:
+        pid = c.post("/predict", json=AD).json()["prediction_id"]
+        assert c.post("/feedback", json={"prediction_id": pid, "actual_clicks": 1200}).status_code == 200
+    logged = [json.loads(line) for line in PREDICTION_LOG.read_text().splitlines()]
+    assert any(r["prediction_id"] == pid and r["device"] == "Mobile" for r in logged)
+    feedback = [json.loads(line) for line in FEEDBACK_LOG.read_text().splitlines()]
+    assert feedback[-1] == {**feedback[-1], "prediction_id": pid, "actual_clicks": 1200}

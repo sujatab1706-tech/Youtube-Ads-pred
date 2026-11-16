@@ -1,0 +1,41 @@
+{
+  "best_model": "linear_log",
+  "test_metrics": {
+    "baseline": {
+      "rmse": 625.8584024500152,
+      "mae": 391.93377578125006,
+      "r2": -3.74154072126931e-05,
+      "median_abs_pct_error": 74.4842856083656
+    },
+    "linear_raw": {
+      "rmse": 356.43808056921716,
+      "mae": 196.45761409606104,
+      "r2": 0.6756362839888327,
+      "median_abs_pct_error": 47.76094746071908
+    },
+    "linear_log": {
+      "rmse": 139.08723771343404,
+      "mae": 71.63208719216321,
+      "r2": 0.9506100440619041,
+      "median_abs_pct_error": 12.202639258056477
+    }
+  },
+  "cv_r2_mean": 0.9562728622660434,
+  "cv_r2_std": 0.004085191876920382,
+  "n_train": 16000,
+  "n_test": 4000,
+  "features": [
+    "log_impressions",
+    "log_budget",
+    "log_subscribers",
+    "ad_length_sec",
+    "video_watch_pct",
+    "thumbnail_quality",
+    "is_weekend",
+    "category",
+    "device",
+    "ad_format",
+    "age_group",
+    "time_of_day"
+  ]
+}
